@@ -54,6 +54,7 @@ services:
       llama-server
       -hf ${MODEL_HF}
       --host 0.0.0.0 --port 8080
+      --parallel 2
       --ctx-size ${CTX_SIZE:-32768}
       --n-gpu-layers ${N_GPU_LAYERS:-99}
       --n-cpu-moe ${N_CPU_MOE:-18}
