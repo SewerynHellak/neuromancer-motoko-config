@@ -5,6 +5,8 @@ services:
     command: tunnel run
     user: "65532:65532"
     environment:
+      # Token lives in .env (gitignored), not inlined. ROTATE the old one in
+      # Cloudflare Zero Trust -> Networks -> Tunnels; it was exposed in plaintext.
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
     networks:
       - ai-stack
@@ -21,18 +23,25 @@ services:
       - "9443"
     ports:
       - "9000:9000"
+    # On ai-stack so cloudflared can route the tunnel to it (was on `default`,
+    # which left it unreachable from the tunnel).
     networks:
       - ai-stack
     restart: unless-stopped
 
+  # Single Gemma model on GPU0 (AtomicBot TurboQuant fork) handling BOTH text and
+  # images. Frontend + cloudflared point here (:8080). NOTE: vision is enabled (no
+  # --no-mmproj in EXTRA_ARGS), so the server disables --cache-reuse -> expect some
+  # per-turn prompt reprocessing. This is the accepted tradeoff for one multimodal
+  # model. To get cache-reuse back, switch to the text-only + GPU1 router setup.
   llama-server:
     container_name: llama
     build:
       context: .
       args:
-        LLAMACPP_REF: ${LLAMACPP_REF:-master}
-        # 89 = RTX 4060 Ti (Ada). Add others e.g. "86;89" if needed.
-        CUDA_ARCH: ${CUDA_ARCH:-89}
+        LLAMACPP_REPO: ${LLAMACPP_REPO:-https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant.git}
+        LLAMACPP_REF: ${LLAMACPP_REF:-feature/turboquant-kv-cache}
+        CUDA_ARCH: ${CUDA_ARCH:-89}   # 89 = RTX 4060 Ti (Ada)
     image: llamacpp-turboquant:local
     restart: unless-stopped
     ports:
@@ -41,20 +50,18 @@ services:
     networks:
       - ai-stack
     volumes:
-      - models:/models
-    # GPU access via NVIDIA Container Toolkit
+      - models:/models            # HF cache + downloaded GGUFs persist here
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['0']
+              device_ids: ['0'] # RTX 4060 Ti
               capabilities: [gpu]
     command: >
       llama-server
       -hf ${MODEL_HF}
       --host 0.0.0.0 --port 8080
-      --parallel 2
       --ctx-size ${CTX_SIZE:-32768}
       --n-gpu-layers ${N_GPU_LAYERS:-99}
       --n-cpu-moe ${N_CPU_MOE:-18}
@@ -71,11 +78,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 20
-      start_period: 600s
+      start_period: 600s          # first run downloads the model (slow)
 
 volumes:
   models:
 
 networks:
   ai-stack:
-    name: aistack
+    name: aistack_ai-stack

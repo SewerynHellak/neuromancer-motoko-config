@@ -3,6 +3,10 @@
 # ---------- build stage ----------
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
 
+# AtomicBot fork: newer, better-synced TurboQuant fork with an extended Gemma 4
+# tool-call mapper (common_chat_peg_gemma4_mapper) + MTP speculative decoding.
+# To revert to the original: LLAMACPP_REPO=https://github.com/TheTom/llama-cpp-turboquant.git
+ARG LLAMACPP_REPO=https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant.git
 ARG LLAMACPP_REF=feature/turboquant-kv-cache
 ARG CUDA_ARCH=89
 
@@ -11,10 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --depth 1 --branch "${LLAMACPP_REF}" \
-        https://github.com/TheTom/llama-cpp-turboquant.git . \
-    || (git clone https://github.com/TheTom/llama-cpp-turboquant.git . \
-        && git checkout "${LLAMACPP_REF}")
+RUN git clone --depth 1 --branch "${LLAMACPP_REF}" "${LLAMACPP_REPO}" . \
+    || (git clone "${LLAMACPP_REPO}" . && git checkout "${LLAMACPP_REF}")
 
 # libcuda.so (the CUDA *driver* API: cuMemCreate, cuDeviceGet, ...) is provided
 # by the host GPU driver at runtime, NOT in the devel image at build time.
@@ -45,6 +47,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /src/build/bin/llama-server /usr/local/bin/llama-server
 COPY --from=build /src/build/bin/*.so /usr/local/lib/
 RUN ldconfig
+
+# Bake the MTP speculative-decoding draft head into the image. It must live
+# OUTSIDE /models -- that path is a runtime volume mount which would shadow any
+# file baked there. --mtp-head in .env points at this path.
+ARG MTP_HEAD_URL=https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/mtp-gemma-4-26B-A4B-it.gguf
+RUN mkdir -p /opt/mtp \
+ && curl -fSL -o /opt/mtp/mtp-gemma-4-26B-A4B-it.gguf "${MTP_HEAD_URL}"
 
 ENV LLAMA_CACHE=/models
 WORKDIR /models
